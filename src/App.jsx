@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { saveGame, loadGame, subscribeToGame, appendAnalytic, loadAnalytics } from "./firebase";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -31,39 +32,6 @@ function fmtHour(h) {
   const ampm = h >= 12 ? "PM" : "AM";
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${h12}${ampm}`;
-}
-
-// ── storage helpers (using localStorage) ──────────────────────────────────────
-
-async function saveGame(code, state) {
-  localStorage.setItem(`game:${code}`, JSON.stringify(state));
-}
-
-async function loadGame(code) {
-  try {
-    const r = localStorage.getItem(`game:${code}`);
-    return r ? JSON.parse(r) : null;
-  } catch { return null; }
-}
-
-async function appendAnalytic(entry) {
-  try {
-    let list = [];
-    try {
-      const r = localStorage.getItem("analytics");
-      if (r) list = JSON.parse(r);
-    } catch {}
-    list.push(entry);
-    if (list.length > 500) list = list.slice(-500);
-    localStorage.setItem("analytics", JSON.stringify(list));
-  } catch {}
-}
-
-async function loadAnalytics() {
-  try {
-    const r = localStorage.getItem("analytics");
-    return r ? JSON.parse(r) : [];
-  } catch { return []; }
 }
 
 // ── CSS ───────────────────────────────────────────────────────────────────────
@@ -324,14 +292,20 @@ export default function TicTacToe() {
     return () => window.removeEventListener("keydown", onKey);
   }, [screen]);
 
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+  // Cleanup Firebase subscription on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) pollRef.current(); // unsubscribe
+    };
+  }, []);
 
-  const startPolling = useCallback((code) => {
-    if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = setInterval(async () => {
-      const state = await loadGame(code);
+  const startSubscription = useCallback((code) => {
+    // Unsubscribe from previous if any
+    if (pollRef.current) pollRef.current();
+    // Subscribe to real-time updates from Firebase
+    pollRef.current = subscribeToGame(code, (state) => {
       if (state) setGameState(state);
-    }, 1200);
+    });
   }, []);
 
   useEffect(() => {
@@ -369,7 +343,7 @@ export default function TicTacToe() {
     setMySymbol("X");
     setGameState(initState);
     analyticsRecorded.current = false;
-    startPolling(code);
+    startSubscription(code);
     setScreen("waiting");
     setLoading(false);
   };
@@ -389,7 +363,7 @@ export default function TicTacToe() {
     setGameState(updated);
     analyticsRecorded.current = false;
     gameStartRef.current = Date.now();
-    startPolling(code);
+    startSubscription(code);
     setScreen("game");
     setLoading(false);
   };
@@ -422,7 +396,7 @@ export default function TicTacToe() {
   };
 
   const leaveGame = () => {
-    if (pollRef.current) clearInterval(pollRef.current);
+    if (pollRef.current) pollRef.current(); // unsubscribe from Firebase
     setScreen("home"); setGameState(null); setRoomCode("");
     setMySymbol(null); setInputCode(""); setError(""); setMyName("");
     analyticsRecorded.current = false;
@@ -485,7 +459,7 @@ export default function TicTacToe() {
           </div>
 
           {error && <div style={{ color:"#ff4d5a", fontSize:12, letterSpacing:1, marginTop:8 }}>{error}</div>}
-          <div style={{ ...muted, marginTop:40, fontSize:9 }}>Type <em>admin</em> to access the dashboard</div>
+          {/* <div style={{ ...muted, marginTop:40, fontSize:9 }}>Type <em>admin</em> to access the dashboard</div> */}
         </div>
       )}
 
