@@ -14,14 +14,34 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
+// Helper to ensure board is always a proper 9-element array
+function normalizeBoard(board) {
+  if (!board || !Array.isArray(board)) {
+    return Array(9).fill("");
+  }
+  // Ensure exactly 9 elements, replace null/undefined with ""
+  return Array(9).fill("").map((_, i) => board[i] || "");
+}
+
 // Storage helpers for game state
 export async function saveGame(code, state) {
-  await set(ref(db, `games/${code}`), state);
+  // Convert null values to empty strings for Firebase compatibility
+  const toSave = {
+    ...state,
+    board: (state.board || []).map(cell => cell === null ? "" : cell)
+  };
+  await set(ref(db, `games/${code}`), toSave);
 }
 
 export async function loadGame(code) {
   const snapshot = await get(ref(db, `games/${code}`));
-  return snapshot.exists() ? snapshot.val() : null;
+  if (!snapshot.exists()) return null;
+  const data = snapshot.val();
+  // Normalize board back to proper array
+  return {
+    ...data,
+    board: normalizeBoard(data.board)
+  };
 }
 
 // Real-time listener for game updates
@@ -29,7 +49,12 @@ export function subscribeToGame(code, callback) {
   const gameRef = ref(db, `games/${code}`);
   return onValue(gameRef, (snapshot) => {
     if (snapshot.exists()) {
-      callback(snapshot.val());
+      const data = snapshot.val();
+      // Normalize board back to proper array
+      callback({
+        ...data,
+        board: normalizeBoard(data.board)
+      });
     }
   });
 }

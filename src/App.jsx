@@ -17,7 +17,7 @@ function checkWinner(board) {
     if (board[a] && board[a] === board[b] && board[a] === board[c])
       return { winner: board[a], line: [a,b,c] };
   }
-  if (board.every(c => c !== null)) return { winner: "draw", line: [] };
+  if (board.every(c => c !== "")) return { winner: "draw", line: [] };
   return null;
 }
 
@@ -335,7 +335,7 @@ export default function TicTacToe() {
     setLoading(true); setError("");
     const code = generateCode();
     const initState = {
-      board: Array(9).fill(null), turn: "X", players: 1, result: null,
+      board: Array(9).fill(""), turn: "X", players: 1, result: null,
       creatorName: myName.trim(), joinerName: null, moves: 0, startedAt: null,
     };
     await saveGame(code, initState);
@@ -387,7 +387,7 @@ export default function TicTacToe() {
     analyticsRecorded.current = false;
     gameStartRef.current = Date.now();
     const fresh = {
-      board: Array(9).fill(null), turn: "X", players: 2, result: null,
+      board: Array(9).fill(""), turn: "X", players: 2, result: null,
       creatorName: gameState.creatorName, joinerName: gameState.joinerName,
       moves: 0, startedAt: new Date().toISOString(),
     };
