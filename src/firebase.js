@@ -14,13 +14,14 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-// Helper to ensure board is always a proper 9-element array
-function normalizeBoard(board) {
+// Helper to ensure board is always a proper array based on grid size
+function normalizeBoard(board, gridSize = 3) {
+  const totalCells = gridSize * gridSize;
   if (!board || !Array.isArray(board)) {
-    return Array(9).fill("");
+    return Array(totalCells).fill("");
   }
-  // Ensure exactly 9 elements, replace null/undefined with ""
-  return Array(9).fill("").map((_, i) => board[i] || "");
+  // Ensure correct number of elements, replace null/undefined with ""
+  return Array(totalCells).fill("").map((_, i) => board[i] || "");
 }
 
 // Storage helpers for game state
@@ -37,10 +38,11 @@ export async function loadGame(code) {
   const snapshot = await get(ref(db, `games/${code}`));
   if (!snapshot.exists()) return null;
   const data = snapshot.val();
+  const gridSize = data.gridSize || 3;
   // Normalize board back to proper array
   return {
     ...data,
-    board: normalizeBoard(data.board)
+    board: normalizeBoard(data.board, gridSize)
   };
 }
 
@@ -50,10 +52,11 @@ export function subscribeToGame(code, callback) {
   return onValue(gameRef, (snapshot) => {
     if (snapshot.exists()) {
       const data = snapshot.val();
+      const gridSize = data.gridSize || 3;
       // Normalize board back to proper array
       callback({
         ...data,
-        board: normalizeBoard(data.board)
+        board: normalizeBoard(data.board, gridSize)
       });
     }
   });

@@ -7,16 +7,54 @@ function generateCode() {
   return Math.random().toString(36).substring(2, 7).toUpperCase();
 }
 
-function checkWinner(board) {
-  const lines = [
-    [0,1,2],[3,4,5],[6,7,8],
-    [0,3,6],[1,4,7],[2,5,8],
-    [0,4,8],[2,4,6],
-  ];
-  for (const [a,b,c] of lines) {
-    if (board[a] && board[a] === board[b] && board[a] === board[c])
-      return { winner: board[a], line: [a,b,c] };
+// Dynamic win checker for any grid size
+function checkWinner(board, gridSize) {
+  const winLength = gridSize >= 5 ? 4 : gridSize; // 4-in-a-row for 5x5+, otherwise full line
+  const lines = [];
+  
+  // Rows
+  for (let r = 0; r < gridSize; r++) {
+    for (let c = 0; c <= gridSize - winLength; c++) {
+      const line = [];
+      for (let k = 0; k < winLength; k++) line.push(r * gridSize + c + k);
+      lines.push(line);
+    }
   }
+  
+  // Columns
+  for (let c = 0; c < gridSize; c++) {
+    for (let r = 0; r <= gridSize - winLength; r++) {
+      const line = [];
+      for (let k = 0; k < winLength; k++) line.push((r + k) * gridSize + c);
+      lines.push(line);
+    }
+  }
+  
+  // Diagonals (top-left to bottom-right)
+  for (let r = 0; r <= gridSize - winLength; r++) {
+    for (let c = 0; c <= gridSize - winLength; c++) {
+      const line = [];
+      for (let k = 0; k < winLength; k++) line.push((r + k) * gridSize + c + k);
+      lines.push(line);
+    }
+  }
+  
+  // Diagonals (top-right to bottom-left)
+  for (let r = 0; r <= gridSize - winLength; r++) {
+    for (let c = winLength - 1; c < gridSize; c++) {
+      const line = [];
+      for (let k = 0; k < winLength; k++) line.push((r + k) * gridSize + c - k);
+      lines.push(line);
+    }
+  }
+  
+  for (const line of lines) {
+    const first = board[line[0]];
+    if (first && line.every(idx => board[idx] === first)) {
+      return { winner: first, line };
+    }
+  }
+  
   if (board.every(c => c !== "")) return { winner: "draw", line: [] };
   return null;
 }
@@ -275,6 +313,7 @@ export default function TicTacToe() {
   const [gameState, setGameState] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [gridSize, setGridSize] = useState(3); // Creator can choose 3, 4, or 5
   const pollRef = useRef(null);
   const gameStartRef = useRef(null);
   const analyticsRecorded = useRef(false);
@@ -334,9 +373,11 @@ export default function TicTacToe() {
     if (!myName.trim()) { setError("Enter your name first."); return; }
     setLoading(true); setError("");
     const code = generateCode();
+    const totalCells = gridSize * gridSize;
     const initState = {
-      board: Array(9).fill(""), turn: "X", players: 1, result: null,
+      board: Array(totalCells).fill(""), turn: "X", players: 1, result: null,
       creatorName: myName.trim(), joinerName: null, moves: 0, startedAt: null,
+      gridSize: gridSize, lastStarter: "X", scoreX: 0, scoreO: 0,
     };
     await saveGame(code, initState);
     setRoomCode(code);
@@ -372,12 +413,22 @@ export default function TicTacToe() {
     if (!gameState || gameState.result || gameState.turn !== mySymbol || gameState.board[idx]) return;
     const newBoard = [...gameState.board];
     newBoard[idx] = mySymbol;
-    const result = checkWinner(newBoard);
+    const currentGridSize = gameState.gridSize || 3;
+    const result = checkWinner(newBoard, currentGridSize);
+    
+    // Update scores if game ended
+    let newScoreX = gameState.scoreX || 0;
+    let newScoreO = gameState.scoreO || 0;
+    if (result && result.winner === "X") newScoreX++;
+    if (result && result.winner === "O") newScoreO++;
+    
     const updated = {
       ...gameState, board: newBoard,
       turn: mySymbol === "X" ? "O" : "X",
       result: result || null,
       moves: (gameState.moves || 0) + 1,
+      scoreX: newScoreX,
+      scoreO: newScoreO,
     };
     setGameState(updated);
     await saveGame(roomCode, updated);
@@ -386,10 +437,16 @@ export default function TicTacToe() {
   const resetGame = async () => {
     analyticsRecorded.current = false;
     gameStartRef.current = Date.now();
+    const currentGridSize = gameState.gridSize || 3;
+    const totalCells = currentGridSize * currentGridSize;
+    // Alternate starter: if last starter was X, now O starts
+    const nextStarter = gameState.lastStarter === "X" ? "O" : "X";
     const fresh = {
-      board: Array(9).fill(""), turn: "X", players: 2, result: null,
+      board: Array(totalCells).fill(""), turn: nextStarter, players: 2, result: null,
       creatorName: gameState.creatorName, joinerName: gameState.joinerName,
       moves: 0, startedAt: new Date().toISOString(),
+      gridSize: currentGridSize, lastStarter: nextStarter,
+      scoreX: gameState.scoreX || 0, scoreO: gameState.scoreO || 0,
     };
     setGameState(fresh);
     await saveGame(roomCode, fresh);
@@ -421,7 +478,12 @@ export default function TicTacToe() {
       {/* HOME */}
       {screen === "home" && (
         <div className="fade" style={{ textAlign:"center", width:"100%", maxWidth:360 }}>
-          <div className="ttl" style={{ fontSize:70, lineHeight:1, marginBottom:4 }}>
+          <div 
+            className="ttl" 
+            style={{ fontSize:70, lineHeight:1, marginBottom:4, cursor:"default" }}
+            onDoubleClick={() => setScreen("admin")}
+            title="Double-click for admin"
+          >
             TIC<br/>TAC<br/>TOE
           </div>
           <div style={{ ...muted, marginBottom:36 }}>MULTIPLAYER</div>
@@ -436,6 +498,25 @@ export default function TicTacToe() {
               maxLength={20}
               onKeyDown={e => e.key === "Enter" && createGame()}
             />
+          </div>
+
+          <div style={{ marginBottom:20, textAlign:"left" }}>
+            <div className="label">Grid Size</div>
+            <div style={{ display:"flex", gap:8 }}>
+              {[3, 4, 5].map(size => (
+                <button
+                  key={size}
+                  className={`btn${gridSize === size ? " btn-cyan" : ""}`}
+                  style={{ flex:1, padding:"10px 0" }}
+                  onClick={() => setGridSize(size)}
+                >
+                  {size}×{size}
+                </button>
+              ))}
+            </div>
+            <div style={{ ...muted, fontSize:9, marginTop:6 }}>
+              {gridSize >= 5 ? "4-in-a-row to win" : `${gridSize}-in-a-row to win`}
+            </div>
           </div>
 
           <button className="btn" style={{ width:"100%", marginBottom:24 }} onClick={createGame} disabled={loading}>
@@ -470,20 +551,54 @@ export default function TicTacToe() {
           <div className="ttl" style={{ fontSize:88, letterSpacing:14, margin:"8px 0 20px" }}>{roomCode}</div>
           <div style={{ ...muted, marginBottom:6 }}>Share this code with your opponent</div>
           <div className="blink" style={{ ...muted, marginBottom:28 }}>Waiting for opponent…</div>
-          <div style={{ marginBottom:32 }}>
+          <div style={{ marginBottom:16 }}>
             <span style={{ fontSize:12, color:"#888", letterSpacing:2 }}>
               You are <span style={{ color:"#ff4d5a" }}>{myName}</span> — playing <span style={{ color:"#ff4d5a" }}>X</span>
             </span>
+          </div>
+          <div style={{ ...muted, marginBottom:32 }}>
+            Grid: {gameState?.gridSize || 3}×{gameState?.gridSize || 3}
           </div>
           <button className="btn btn-red" onClick={leaveGame}>Leave</button>
         </div>
       )}
 
       {/* GAME */}
-      {screen === "game" && gameState && (
+      {screen === "game" && gameState && (() => {
+        const currentGridSize = gameState.gridSize || 3;
+        const cellSize = currentGridSize === 3 ? 100 : currentGridSize === 4 ? 80 : 64;
+        const fontSize = currentGridSize === 3 ? 54 : currentGridSize === 4 ? 40 : 32;
+        const totalCells = currentGridSize * currentGridSize;
+        
+        return (
         <div className="fade" style={{ textAlign:"center" }}>
+          {/* Score Display */}
+          <div style={{ 
+            display:"flex", justifyContent:"center", gap:24, marginBottom:20,
+            padding:"12px 24px", background:"#111118", border:"1px solid #1e1e2e"
+          }}>
+            <div style={{ textAlign:"center" }}>
+              <div style={{ fontSize:9, letterSpacing:2, color:"#666", marginBottom:4 }}>SCORE</div>
+              <div style={{ display:"flex", gap:16, alignItems:"center" }}>
+                <div>
+                  <span style={{ color:"#ff4d5a", fontFamily:"'Bebas Neue',sans-serif", fontSize:32 }}>
+                    {gameState.scoreX || 0}
+                  </span>
+                  <span style={{ color:"#555", fontSize:10, marginLeft:4 }}>X</span>
+                </div>
+                <div style={{ color:"#333", fontSize:20 }}>—</div>
+                <div>
+                  <span style={{ color:"#555", fontSize:10, marginRight:4 }}>O</span>
+                  <span style={{ color:"#4de8ff", fontFamily:"'Bebas Neue',sans-serif", fontSize:32 }}>
+                    {gameState.scoreO || 0}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* player names */}
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", width:320, marginBottom:18 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", width: Math.max(320, currentGridSize * cellSize + 20), marginBottom:18 }}>
             <div style={{ textAlign:"left" }}>
               <div className="label">X · {gameState.creatorName || "Player 1"}</div>
               <div style={{
@@ -521,22 +636,25 @@ export default function TicTacToe() {
             </div>
           </div>
 
-          <div style={{ ...muted, fontSize:9, marginBottom:16 }}>ROOM · {roomCode}</div>
+          <div style={{ ...muted, fontSize:9, marginBottom:16 }}>ROOM · {roomCode} · {currentGridSize}×{currentGridSize}</div>
 
           {/* Board */}
           <div style={{
-            display:"grid", gridTemplateColumns:"repeat(3,100px)",
-            gridTemplateRows:"repeat(3,100px)", border:"2px solid #1e1e2e", marginBottom:22,
+            display:"grid", 
+            gridTemplateColumns:`repeat(${currentGridSize},${cellSize}px)`,
+            gridTemplateRows:`repeat(${currentGridSize},${cellSize}px)`, 
+            border:"2px solid #1e1e2e", marginBottom:22,
           }}>
-            {Array(9).fill(0).map((_, i) => {
+            {Array(totalCells).fill(0).map((_, i) => {
               const b1 = "1px solid #1e1e2e";
               return (
                 <button
                   key={i}
                   className={`cell${gameState.board[i] ? ` ${gameState.board[i]}` : ""}${winLine.includes(i) ? " win" : ""}`}
                   style={{
-                    borderTop:    i < 3       ? "none" : b1,
-                    borderLeft:   i % 3 === 0 ? "none" : b1,
+                    width: cellSize, height: cellSize, fontSize: fontSize,
+                    borderTop:    i < currentGridSize ? "none" : b1,
+                    borderLeft:   i % currentGridSize === 0 ? "none" : b1,
                     borderRight:"none", borderBottom:"none",
                   }}
                   onClick={() => makeMove(i)}
@@ -569,7 +687,8 @@ export default function TicTacToe() {
             <button className="btn btn-red" onClick={leaveGame}>Leave</button>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
