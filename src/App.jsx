@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { saveGame, loadGame, subscribeToGame, appendAnalytic, loadAnalytics } from "./firebase";
+import { hostRoom, joinRoom, sendState, closeRoom } from "./p2p";
+import { appendAnalytic, loadAnalytics } from "./analytics";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -193,7 +194,7 @@ function AdminDashboard({ onBack }) {
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", marginBottom:32 }}>
         <div>
           <div className="ttl" style={{ fontSize:44, color:"#e8e8e0" }}>ANALYTICS</div>
-          <div style={muted}>Admin · shared data</div>
+          <div style={muted}>Admin · this device only</div>
         </div>
         <button className="btn" onClick={onBack}>← Back</button>
       </div>
@@ -313,8 +314,8 @@ export default function TicTacToe() {
   const [gameState, setGameState] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [opponentLeft, setOpponentLeft] = useState(false);
   const [gridSize, setGridSize] = useState(3); // Creator can choose 3, 4, or 5
-  const pollRef = useRef(null);
   const gameStartRef = useRef(null);
   const analyticsRecorded = useRef(false);
 
@@ -331,20 +332,15 @@ export default function TicTacToe() {
     return () => window.removeEventListener("keydown", onKey);
   }, [screen]);
 
-  // Cleanup Firebase subscription on unmount
-  useEffect(() => {
-    return () => {
-      if (pollRef.current) pollRef.current(); // unsubscribe
-    };
-  }, []);
+  // Close the peer connection on unmount
+  useEffect(() => () => closeRoom(), []);
 
-  const startSubscription = useCallback((code) => {
-    // Unsubscribe from previous if any
-    if (pollRef.current) pollRef.current();
-    // Subscribe to real-time updates from Firebase
-    pollRef.current = subscribeToGame(code, (state) => {
-      if (state) setGameState(state);
-    });
+  const handleRemoteState = useCallback((state) => {
+    setGameState(state);
+    setOpponentLeft(false);
+  }, []);
+  const handleStatus = useCallback((status) => {
+    if (status === "left") setOpponentLeft(true);
   }, []);
 
   useEffect(() => {
@@ -372,19 +368,34 @@ export default function TicTacToe() {
   const createGame = async () => {
     if (!myName.trim()) { setError("Enter your name first."); return; }
     setLoading(true); setError("");
-    const code = generateCode();
     const totalCells = gridSize * gridSize;
-    const initState = {
-      board: Array(totalCells).fill(""), turn: "X", players: 1, result: null,
-      creatorName: myName.trim(), joinerName: null, moves: 0, startedAt: null,
-      gridSize: gridSize, lastStarter: "X", scoreX: 0, scoreO: 0,
-    };
-    await saveGame(code, initState);
+    let code, initState;
+    try {
+      for (let attempt = 0; ; attempt++) {
+        code = generateCode();
+        initState = {
+          board: Array(totalCells).fill(""), turn: "X", players: 1, result: null,
+          creatorName: myName.trim(), joinerName: null, moves: 0, startedAt: null,
+          gridSize: gridSize, lastStarter: "X", scoreX: 0, scoreO: 0,
+        };
+        try {
+          await hostRoom(code, initState, { onState: handleRemoteState, onStatus: handleStatus });
+          break;
+        } catch (e) {
+          // Room code already taken on the broker → try another one
+          if (e?.type !== "unavailable-id" || attempt >= 4) throw e;
+        }
+      }
+    } catch {
+      setError("Couldn't reach the connection service. Check your internet and try again.");
+      setLoading(false);
+      return;
+    }
     setRoomCode(code);
     setMySymbol("X");
     setGameState(initState);
+    setOpponentLeft(false);
     analyticsRecorded.current = false;
-    startSubscription(code);
     setScreen("waiting");
     setLoading(false);
   };
@@ -394,18 +405,23 @@ export default function TicTacToe() {
     if (!inputCode.trim()) { setError("Enter a room code."); return; }
     setLoading(true); setError("");
     const code = inputCode.trim().toUpperCase();
-    const state = await loadGame(code);
-    if (!state)             { setError("Room not found."); setLoading(false); return; }
-    if (state.players >= 2) { setError("Room is full!");   setLoading(false); return; }
-    const updated = { ...state, players: 2, joinerName: myName.trim(), startedAt: new Date().toISOString() };
-    await saveGame(code, updated);
-    setRoomCode(code);
-    setMySymbol("O");
-    setGameState(updated);
-    analyticsRecorded.current = false;
-    gameStartRef.current = Date.now();
-    startSubscription(code);
-    setScreen("game");
+    try {
+      const state = await joinRoom(code, myName.trim(), { onState: handleRemoteState, onStatus: handleStatus });
+      setRoomCode(code);
+      setMySymbol("O");
+      setGameState(state);
+      setOpponentLeft(false);
+      analyticsRecorded.current = false;
+      gameStartRef.current = Date.now();
+      setScreen("game");
+    } catch (e) {
+      const msgs = {
+        "not-found": "Room not found.",
+        "full": "Room is full!",
+        "timeout": "Couldn't connect. Check the code and try again.",
+      };
+      setError(msgs[e.message] || "Connection failed. Check your internet and try again.");
+    }
     setLoading(false);
   };
 
@@ -431,7 +447,7 @@ export default function TicTacToe() {
       scoreO: newScoreO,
     };
     setGameState(updated);
-    await saveGame(roomCode, updated);
+    if (!sendState(updated)) setOpponentLeft(true);
   };
 
   const resetGame = async () => {
@@ -449,11 +465,12 @@ export default function TicTacToe() {
       scoreX: gameState.scoreX || 0, scoreO: gameState.scoreO || 0,
     };
     setGameState(fresh);
-    await saveGame(roomCode, fresh);
+    if (!sendState(fresh)) setOpponentLeft(true);
   };
 
   const leaveGame = () => {
-    if (pollRef.current) pollRef.current(); // unsubscribe from Firebase
+    closeRoom();
+    setOpponentLeft(false);
     setScreen("home"); setGameState(null); setRoomCode("");
     setMySymbol(null); setInputCode(""); setError(""); setMyName("");
     analyticsRecorded.current = false;
@@ -572,6 +589,12 @@ export default function TicTacToe() {
         
         return (
         <div className="fade" style={{ textAlign:"center" }}>
+          {opponentLeft && (
+            <div style={{ color:"#ff4d5a", fontSize:11, letterSpacing:2, marginBottom:14 }}>
+              OPPONENT DISCONNECTED{mySymbol === "X" ? " — THEY CAN REJOIN WITH THE SAME CODE" : ""}
+            </div>
+          )}
+
           {/* Score Display */}
           <div style={{ 
             display:"flex", justifyContent:"center", gap:24, marginBottom:20,
